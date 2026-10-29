@@ -28,6 +28,57 @@ ShellRoot {
 
     property bool enabled: true
 
+    // Hide the pill after this many ms without mouse movement (0 = never hide).
+    // Override with WSNUMS_IDLE_HIDE.
+    property int idleHideDelay: {
+        const v = parseInt(Quickshell.env("WSNUMS_IDLE_HIDE") ?? "");
+        return isNaN(v) ? 2000 : Math.max(0, v);
+    }
+
+    property bool pointerActive: true
+    property string lastCursorPos: ""
+    property bool hovering: false
+
+    // Track pointer movement through Hyprland's command socket so the pill can
+    // fade away when the mouse rests and reappear on movement.
+    Process {
+        id: cursorProc
+
+        running: false
+        command: ["hyprctl", "cursorpos"]
+        stdout: StdioCollector {
+            id: cursorOut
+            onDataChanged: {
+                const lines = text.trim().split("\n");
+                const pos = lines[lines.length - 1].trim();
+                if (/^\d+,\s*\d+$/.test(pos) && pos !== root.lastCursorPos) {
+                    root.lastCursorPos = pos;
+                    root.pointerActive = true;
+                    idleTimer.restart();
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: cursorPoll
+
+        interval: 250
+        running: root.enabled && root.idleHideDelay > 0
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: cursorProc.running = true
+    }
+
+    Timer {
+        id: idleTimer
+
+        interval: Math.max(1, root.idleHideDelay)
+        running: root.enabled && root.idleHideDelay > 0
+        repeat: true
+        onTriggered: root.pointerActive = false
+    }
+
     // Neutral fallback palette, replaced by the Hyprland scheme if available.
     property var palette: ({
         surfaceContainer: "#1f1f1f",
@@ -219,7 +270,7 @@ ShellRoot {
             color: "transparent"
             implicitWidth: rowW
             implicitHeight: rowH
-            visible: root.enabled && ipc !== null
+            visible: root.enabled && ipc !== null && (root.pointerActive || root.hovering)
 
             surfaceFormat.opaque: false
             WlrLayershell.namespace: "wsnums"
@@ -301,6 +352,7 @@ ShellRoot {
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: chip.current ? Qt.ArrowCursor : Qt.PointingHandCursor
+                                onContainsMouseChanged: root.hovering = containsMouse
                                 onClicked: {
                                     if (chip.current || chip.firing)
                                         return;
